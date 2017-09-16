@@ -1,0 +1,7 @@
+[package]
+name = "magma"
+version = "0.1.0"
+authors = ["Semyon Verchenko <semverchenko@gmail.com>"]
+
+[dependencies]
+byteorder = "1.1.0"
