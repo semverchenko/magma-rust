@@ -31,6 +31,7 @@ impl error::Error for GostError {
     }
 }
 
+#[allow(dead_code)]
 const SBOX: [[u8; 16]; 8] = [
     [12, 4, 6, 2, 10, 5, 11, 9, 14, 8, 13, 7, 0, 3, 15, 1],
     [6, 8, 2, 3, 9, 10, 5, 12, 1, 14, 4, 7, 11, 13, 0, 15],
@@ -43,8 +44,9 @@ const SBOX: [[u8; 16]; 8] = [
 ];
 
 
+#[allow(dead_code)]
 #[inline]
-fn __magma_round(l: &mut u32, r: &mut u32, key: u32) {
+fn __magma_round_slow(l: &mut u32, r: &mut u32, key: u32) {
     let t = l.overflowing_add(key).0;
     let mut x: u32 = 0;
 
@@ -52,6 +54,16 @@ fn __magma_round(l: &mut u32, r: &mut u32, key: u32) {
         x ^= (SBOX[i][((t >> i * 4) & 0xf) as usize] as u32) << 4 * i;
     }
     *r ^= x.rotate_left(11);
+}
+
+mod table;
+
+fn __magma_round(l: &mut u32, r: &mut u32, key: u32) {
+    let t = l.overflowing_add(key).0 as usize;
+
+    for i in 0..4 {
+        *r ^= table::SBOX_LONG[256 * i + ((t >> 8 * i) & 0xff)];
+    }
 }
 
 pub fn magma_round(l: &mut u32, r: &mut u32, key: u32) {
@@ -105,7 +117,7 @@ pub fn magma_decrypt_block(block: u64, key: &GostKey) -> u64 {
     r as u64 | ((l as u64) << 32)
 }
 
-pub fn magma_encrypt_ecb(src: &[u8], dst: &mut [u8], key: &GostKey) -> Result<(), GostError>{
+pub fn magma_encrypt_ecb(src: &[u8], dst: &mut [u8], key: &GostKey) -> Result<(), GostError> {
     if src.len() % 8 != 0 { return Err(GostError::NotDivisorOf8) }
     if src.len() != dst.len() { return Err(GostError::DifferentLength) }
     let len = src.len() / 8;
@@ -120,9 +132,10 @@ pub fn magma_encrypt_ecb(src: &[u8], dst: &mut [u8], key: &GostKey) -> Result<()
     Ok(())
 }
 
-pub fn magma_decrypt_ecb(src: &[u8], dst: &mut [u8], key: &GostKey) -> Result<(), GostError>{
+pub fn magma_decrypt_ecb(src: &[u8], dst: &mut [u8], key: &GostKey) -> Result<(), GostError> {
     if src.len() % 8 != 0 { return Err(GostError::NotDivisorOf8) }
     if src.len() != dst.len() { return Err(GostError::DifferentLength) }
+
     let len = src.len() / 8;
 
     for i in 0..len {
@@ -133,4 +146,33 @@ pub fn magma_decrypt_ecb(src: &[u8], dst: &mut [u8], key: &GostKey) -> Result<()
     }
 
     Ok(())
+}
+
+pub fn magma_encrypt_gamma(src: &[u8], dst: &mut [u8], key: &GostKey, iv: u32) -> Result<(), GostError> {
+    if src.len() != dst.len() { return Err(GostError::DifferentLength) }
+    
+    let len = src.len();
+
+    let mut ctr = (iv as u64) << 32;
+
+    for i in 0..len / 8 {
+        let gamma = magma_encrypt_block(ctr, key);
+        ctr += 1;
+        LittleEndian::write_u64(
+            &mut dst[8*i..8*(i+1)],
+            LittleEndian::read_u64(&src[8*i..8*(i+1)]) ^ gamma
+        );
+    }
+    if len % 8 > 0 {
+        let rest = len % 8;
+        let gamma = magma_encrypt_block(ctr, key);
+        let t = LittleEndian::read_uint(&src[len / 8 * 8..], rest);
+        let enc = (t ^ gamma) & ((1u64 << rest * 8) - 1);
+        LittleEndian::write_uint(&mut dst[len / 8 * 8..], enc, rest);
+    }
+    Ok(())
+}
+
+pub fn magma_decrypt_gamma(src: &[u8], dst: &mut [u8], key: &GostKey, iv: u32) -> Result<(), GostError> {
+    magma_encrypt_gamma(src, dst, key, iv)
 }
